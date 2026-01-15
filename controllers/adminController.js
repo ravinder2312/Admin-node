@@ -155,6 +155,7 @@ exports.getClientKeywords = async (req, res) => {
 
     const query = `
       SELECT
+	      km.KeyWord, km.Filter, km.Filter_String,
         ck.ClientID,
         ck.KeywordID,
         ck.Category,
@@ -165,6 +166,8 @@ exports.getClientKeywords = async (req, res) => {
       FROM clientkeyword ck
       JOIN clientprofile cp
         ON ck.clientid = cp.clientid
+	   JOIN keyword_master km
+        ON ck.KeywordID = km.keyid
       WHERE ck.clientid = ?;
 
     `;
