@@ -9,6 +9,8 @@ const articleController = require("./controllers/articleController");
 const additionalKeywordsController = require("./controllers/additionalKeywordsController");
 const adminController = require("./controllers/adminController");
 const mongoose = require("mongoose");
+const adminRouter = require("./routers/adminRouter");
+
 
 const fs = require("fs");
 const https = require("https");
@@ -38,7 +40,7 @@ app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }))
-app.use(bodyParser.json())
+// app.use(bodyParser.json())
 app.use(cors());
 app.use(function (req, res, next) {
   res.header("Access-Control-Allow-Origin", "*");
@@ -76,10 +78,12 @@ app.post("/getSubsectorById", articleController.getSubsectorByID);
 app.post("/additionalKeywords", additionalKeywordsController.addKeywords);
 // app.post("/upload-article-image", articleController.upload.single("file"), articleController.uploadArticleImage);
 app.post("/getImageBase64", articleController.getImageBase64);
-app.post("/admin/find", adminController.findArticles);
-app.post("/admin/articleDetails", adminController.articleDetails);
-app.get("/admin/getClients", adminController.getClients);
-app.post("/admin/getClientKeywords", adminController.getClientKeywords);
+app.use("/admin", adminRouter);
+
+// app.post("/admin/find", adminController.findArticles);
+// app.post("/admin/articleDetails", adminController.articleDetails);
+// app.get("/admin/getClients", adminController.getClients);
+// app.post("/admin/getClientKeywords", adminController.getClientKeywords);
 
 // app.post("/articleUpdate", adminController.updateArticle);
 // console.log("adminController:", adminController);
