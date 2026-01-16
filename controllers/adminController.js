@@ -47,6 +47,14 @@ exports.articleDetails = async (req, res) => {
           allKeywords: { $push: "$keyword" },
         },
       },
+      {
+        $lookup: {
+          from: "article_fulltext",
+          localField: "_id",
+          foreignField: "articleid",
+          as: "fulltext",
+        },
+      },
 
       {
         $project: {
@@ -54,6 +62,7 @@ exports.articleDetails = async (req, res) => {
           // destucetured article details
           headline: "$article.headline",
           subtitle: "$article.subtitle",
+          fulltext: { $arrayElemAt: ["$fulltext.fulltext", 0] },
           publication: "$article.publication",
           pubdate: "$article.pubdate",
           ave: "$article.ave",
@@ -199,7 +208,6 @@ updateArticle = async (req, res) => {
     // Allowed fields
     const allowed = [
       "headline",
-      "subtitle",
       "iscolor",
       "isphoto",
       "ispremium",
@@ -399,86 +407,82 @@ exports.removeJournalistFromArticle = async (req, res) => {
 //   }
 // };
 
-// exports.addToClient = async (req, res) => {
-//   try {
-//     const { articleid, client, userid } = req.body;
-//     // client = [{ clientid, clientname, keyword = {} }]
+exports.addToClient = async (req, res) => {
+  try {
+    const { articleid, keyword, userid } = req.body;
 
-//     if (!articleid || client.length == 0 || !userid)
-//       return res
-//         .status(400)
-//         .json({ message: "articleid & clientid are required" });
-//     let existingArticleList = await Article.find({ articleid });
-//     if (existingArticleList.length == 0) {
-//       return res.status(404).json({ message: "Article not found" });
-//     }
-//     let existingArticle = null;
-//     let newArticleData = {};
-//     let results = [];
-//     for (const c of client) {
-//       const { clientid, clientname, keyword } = c;
-//       if (
-//         existingArticleList.some((article) => article.clientid === clientid)
-//       ) {
-//         existingArticle = existingArticleList.find(
-//           (article) => article.clientid === clientid
-//         );
-//         newArticleData = existingArticle.toObject();
-//         for (const kw of keyword) {
-//         kStatus = existingArticle.keyword.find(
-//           (k) => k.keyword == kw.keyword
-//         );
-//         if (!existingArticle.keyword.some((k) => k.keyword === kw.keyword)) {
-//           newArticleData.keyword.push(kw);
-//         } else {
-//           newArticleData.keyword = existingArticle.keyword.map((k) =>
-//             k.keyword === kw.keyword ? kw : k
-//           );
-//         }
-//       }
-//         delete newArticleData._id;
-//         await Article.updateMany(
-//           { _id: existingArticle._id },
-//           { $set: newArticleData },
-//           { strict: false }
-//         );
-//         results.push({ clientid, status: "updated" });
-//       } else {
-//         existingArticle = existingArticleList[0];
-//         newArticleData = existingArticle.toObject();
-//         // update/reset client level data
-//         delete newArticleData._id;
-//         newArticleData.clientid = clientid;
-//         newArticleData.clientname = clientname;
-//         newArticleData.keyword = keyword ? keyword : [];
-//         newArticleData.companysort = 0;
-//         newArticleData.competitionsort = 0;
-//         newArticleData.industrysort = 0;
-//         newArticleData.rejected = 0;
-//         newArticleData.reasonofrejection = "";
-//         newArticleData.qualification = [];
-//         newArticleData.mlData = [];
-//         newArticleData.companyName = [];
-//         newArticleData.userid = userid;
+    if (!articleid || !keyword || !userid || !clientid || !clientname)
+      return res
+        .status(400)
+        .json({ message: "articleid & keyword are required" });
+    let existingArticleList = await Article.find({ articleid });
+    if (existingArticleList.length == 0) {
+      return res.status(404).json({ message: "Article not found" });
+    }
+    let existingArticle = null;
+    let newArticleData = {};
+    let results = [];
+      if (
+        existingArticleList.some((article) => article.clientid === clientid)
+      ) {
+        existingArticle = existingArticleList.find(
+          (article) => article.clientid === clientid
+        );
+        newArticleData = existingArticle.toObject();
+        for (const kw of keyword) {
+        kStatus = existingArticle.keyword.find(
+          (k) => k.keyword == kw.keyword
+        );
+        if (!existingArticle.keyword.some((k) => k.keyword === kw.keyword)) {
+          newArticleData.keyword.push(kw);
+        } else {
+          newArticleData.keyword = existingArticle.keyword.map((k) =>
+            k.keyword === kw.keyword ? kw : k
+          );
+        }
+      }
+        delete newArticleData._id;
+        await Article.updateMany(
+          { _id: existingArticle._id },
+          { $set: newArticleData },
+          { strict: false }
+        );
+        results.push({ clientid, status: "updated" });
+      } else {
+        existingArticle = existingArticleList[0];
+        newArticleData = existingArticle.toObject();
+        // update/reset client level data
+        delete newArticleData._id;
+        newArticleData.clientid = clientid;
+        newArticleData.clientname = clientname;
+        newArticleData.keyword = keyword ? keyword : [];
+        newArticleData.companysort = 0;
+        newArticleData.competitionsort = 0;
+        newArticleData.industrysort = 0;
+        newArticleData.rejected = 0;
+        newArticleData.reasonofrejection = "";
+        newArticleData.qualification = [];
+        newArticleData.mlData = [];
+        newArticleData.companyName = [];
+        newArticleData.userid = userid;
 
-//         // add new article for the client
-//         const newArticle = new Article(newArticleData);
-//         await newArticle.save();
-//         results.push({ clientid, status: "added" });
-//       }
+        // add new article for the client
+        const newArticle = new Article(newArticleData);
+        await newArticle.save();
+        results.push({ clientid, status: "added" });
+      }
 
-//       let fullTextArticle = await Article_fulltext.findOne({ articleid });
-//       if (fullTextArticle) {
-//         if (!fullTextArticle.clientidArray.includes(clientid)) {
-//           fullTextArticle.clientidArray.push(clientid);
-//           await fullTextArticle.save();
-//         }
-//       }
-//     };
-//     console.log("Add to Client Results:", results);
-//     return res.json({ message: "article added Successfully", results });
-//   } catch (err) {
-//     console.error("Update Error:", err);
-//     return res.status(500).json({ message: "Internal Server Error" });
-//   }
-// };
+      let fullTextArticle = await Article_fulltext.findOne({ articleid });
+      if (fullTextArticle) {
+        if (!fullTextArticle.clientidArray.includes(clientid)) {
+          fullTextArticle.clientidArray.push(clientid);
+          await fullTextArticle.save();
+        }
+      }
+    console.log("Add to Client Results:", results);
+    return res.json({ message: "article added Successfully", results });
+  } catch (err) {
+    console.error("Update Error:", err);
+    return res.status(500).json({ message: "Internal Server Error" });
+  }
+};

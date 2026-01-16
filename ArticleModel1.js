@@ -79,10 +79,10 @@ const modelSchema = new mongoose.Schema(
     pagename: String,       
   },
   {
-    collection: "impactliveupdated",
+    collection: "artice_fe",
     strict: false // allows dynamic fields
   }
 );
 
 
-module.exports = mongoose.model("impactliveupdated", modelSchema);
+module.exports = mongoose.model("artice_fe", modelSchema);
