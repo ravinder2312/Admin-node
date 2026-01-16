@@ -209,10 +209,11 @@ updateArticle = async (req, res) => {
     const allowed = [
       "headline",
       "iscolor",
-      "isphoto",
       "ispremium",
-      "userid",
-      "sector"
+      "sector",
+      "pagenumber",
+      "ave",
+      "fulltext",
     ];
 
     const safeUpdate = {};
