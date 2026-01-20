@@ -11,17 +11,47 @@ exports.findArticles = async (req, res) => {
      return res.status(400).json({ message: "pubdate and pubid[] required" });
     }
 
-    const data = await Article.find(
+    const pubidArr = pubid.map(String); // 🔑 FIX
+
+    // const data = await Article.find(
+    //   {
+    //     type: "PRINT",
+    //     pubdate: pubdate,
+    //     pubid: { $in: pubid },
+    //   },
+    //   {
+    //     headline: 1,
+    //     articleid: 1,
+    //   }
+    // );
+
+    const data = await Article.aggregate([
       {
-        type: "PRINT",
-        pubdate: pubdate,
-        pubid: { $in: pubid },
+        $match: {
+          type: "PRINT",
+          pubdate: pubdate,
+          pubid: { $in: pubidArr }
+        }
       },
       {
-        headline: 1,
-        articleid: 1,
+        $group: {
+          _id: "$articleid",
+          articleid: { $first: "$articleid" },
+          headline: { $first: "$headline" }
+        }
+      },
+      {
+        $project: {
+          // _id: 0,
+          articleid: 1,
+          headline: 1
+        }
       }
-    );
+    ]);
+
+    console.log("Articles Data:", data);
+    // return res.json(data);
+    // return res.json(data.length ? data[0] : {});
 
     return res.status(200).json(data);
   } catch (err) {
@@ -49,7 +79,7 @@ exports.articleDetails = async (req, res) => {
       },
       {
         $lookup: {
-          from: "article_fulltext",
+          from: "article_fulltext_fe",
           localField: "_id",
           foreignField: "articleid",
           as: "fulltext",
@@ -191,94 +221,351 @@ exports.getClientKeywords = async (req, res) => {
 };
 
 
-exports.
-updateArticle = async (req, res) => {
+async function updateArticleSQL(articleid, updates) {
+  /* ---------------- ARTICLE TABLE ---------------- */
+
+  const articleFields = {
+    headline: "Title",
+    isPremium: "IsPremium",
+    isPhoto: "IsPhoto",
+    isColor: "IsColor",
+    UserID: "lastmodified_userid"
+  };
+
+  let articleSet = [];
+  let articleParams = [];
+
+  for (const key in articleFields) {
+    if (updates[key] !== undefined) {
+      articleSet.push(`${articleFields[key]} = ?`);
+      articleParams.push(updates[key]);
+    }
+  }
+
+  if (articleSet.length) {
+    const articleQuery = `
+      UPDATE article
+      SET ${articleSet.join(", ")}
+      WHERE ArticleID = ?
+    `;
+    articleParams.push(articleid);
+    await queryDatabase(articleQuery, articleParams);
+  }
+
+  /* ---------------- ARTICLE_IMAGE TABLE ---------------- */
+
+  if (
+    updates.old_page_number !== undefined &&
+    updates.new_page_number !== undefined
+  ) {
+    let imageSet = [];
+    let imageParams = [];
+
+    imageSet.push("Page_Number = ?");
+    imageParams.push(updates.new_page_number);
+
+    if (updates.page_name !== undefined) {
+      imageSet.push("pagename = ?");
+      imageParams.push(updates.page_name);
+    }
+
+    if (updates.full_text !== undefined) {
+      imageSet.push("full_text = ?");
+      imageParams.push(updates.full_text);
+    }
+
+    const imageQuery = `
+      UPDATE article_image
+      SET ${imageSet.join(", ")}
+      WHERE ArticleID = ? AND Page_Number = ?
+    `;
+
+    imageParams.push(articleid, updates.old_page_number);
+    await queryDatabase(imageQuery, imageParams);
+  }
+
+  return true;
+}
+
+
+
+exports.updateArticle = async (req, res) => {
   try {
     const { articleid, updates } = req.body;
 
-    if (!articleid || !updates)
-      return res
-        .status(400)
-        .json({ message: "articleid & updates are required" });
+    console.log("Update Article Request Body:", req.body);
+    if (!articleid || !updates) {
+      return res.status(400).json({
+        message: "articleid & updates are required"
+      });
+    }
 
-        console.log("articleid : ", articleid);
-        console.log("updates: ", updates);
-        
-        
-    // Allowed fields
+    // 🔹 Allowed fields ONLY
     const allowed = [
       "headline",
       "iscolor",
       "isphoto",
       "ispremium",
       "userid",
-      "sector"
+      // "sector"
     ];
 
-    const safeUpdate = {};
-    for (let key of allowed) {
-      if (updates[key] !== undefined) safeUpdate[key] = updates[key];
+    const setData = {};
+
+    // 1️⃣ Collect allowed updates
+    for (const key of allowed) {
+      if (updates[key] !== undefined) {
+        setData[key] = updates[key];
+      }
     }
-    console.log("Safe Update Data:", req.body);
-    const updated = await Article.updateMany(
-      { articleid: articleid },
-      { $set: safeUpdate },
-      { strict: false }
-    );
 
-    // 2️⃣ Page number update (array logic)
+    // 2️⃣ Page number update (optional)
+    let arrayFilters = [];
     if (updates.oldpagenumber && updates.newpagenumber) {
-      const pageSet = {
-        "pagenumber.$[page].pagenumber": updates.newpagenumber
-      };
+      setData["pagenumber.$[page].pagenumber"] =
+        updates.newpagenumber;
 
-      if (updates.newpagename !== undefined ) {
-        pageSet["pagenumber.$[page].pagename"] = updates.newpagename;
+      if (updates.newpagename !== undefined) {
+        setData["pagenumber.$[page].pagename"] =
+          updates.newpagename;
       }
 
-      await Article.updateMany(
-        { articleid },
-        { $set: pageSet },
-        {
-          arrayFilters: [
-            { "page.pagenumber": updates.oldpagenumber }
-          ]
-        }
-      );
+      arrayFilters.push({
+        "page.pagenumber": updates.oldpagenumber
+      });
     }
 
-    // ✅ ensure correct journalist format
-    if (Array.isArray(updates.journalist)) {
-      await Article.updateMany(
-        { articleid },
-        { $set: { journalist: updates.journalist } },
-        { strict: false }
-      );
+    // ✅ SINGLE UPDATE FOR ARTICLE
+    const articleUpdate = await Article.updateMany(
+      { articleid },
+      { $set: setData },
+      arrayFilters.length
+        ? { arrayFilters, strict: false }
+        : { strict: false }
+    );
+
+    // 3️⃣ Fulltext update (only required fields)
+    const ftUpdate = {};
+
+    if (setData.headline !== undefined) {
+      ftUpdate.headline = setData.headline;
     }
 
+    if (updates.fulltext !== undefined) {
+      ftUpdate.fulltext = updates.fulltext;
+    }
 
-    let updateFT = {};
-    if (safeUpdate.headline !== undefined)
-      updateFT.headline = safeUpdate.headline;
-    if (safeUpdate.subtitle !== undefined)
-      updateFT.subtitle = safeUpdate.subtitle;
-    if (updates.fulltext !== undefined)
-      updateFT.fulltext = updates.fulltext;
-      console.log("Updating Fulltext Article:", updateFT);
+    if (Object.keys(ftUpdate).length) {
       await Article_fulltext.updateMany(
-        { articleid: articleid },
-        { $set: updateFT },
+        { articleid },
+        { $set: ftUpdate },
         { strict: false }
       );
-    // }
+    }
 
+        /* ---------------- SQL UPDATE ---------------- */
 
-    return res.json({ message: "Updated Successfully", updated });
+    await updateArticleSQL(articleid, updates);
+
+  
+    return res.json({
+      message: "Updated Successfully",
+      articleUpdate
+    });
+
   } catch (err) {
     console.error("Update Error:", err);
-    return res.status(500).json({ message: "Internal Server Error" });
+    return res.status(500).json({
+      message: "Internal Server Error"
+    });
   }
 };
+
+
+// exports.updateArticleSQL = async (req, res) => {
+//   // const connection = await getConnection(); // mysql2 / pool connection
+
+//   try {
+//     const { articleid, updates } = req.body;
+//     console.log("Update Article SQL Request Body:", req.body);
+    
+//     if (!articleid || !updates) {
+//       return res.status(400).json({
+//         message: "articleid & updates are required"
+//       });
+//     }
+
+//     // await connection.beginTransaction();
+
+//     /* ---------------- ARTICLE TABLE ---------------- */
+
+//     const articleFields = {
+//       headline: "Title",              // 👈 ADD THIS
+//       isPremium: "IsPremium",
+//       isPhoto: "IsPhoto",
+//       isColor: "IsColor",
+//       UserID: "lastmodified_userid"
+//     };
+
+
+//     let articleSet = [];
+//     let articleParams = [];
+
+//     for (const key in articleFields) {
+//       if (updates[key] !== undefined) {
+//         articleSet.push(`${articleFields[key]} = ?`);
+//         articleParams.push(updates[key]);
+//       }
+//     }
+
+//     if (articleSet.length) {
+//       const articleQuery = `
+//         UPDATE article
+//         SET ${articleSet.join(", ")}
+//         WHERE ArticleID = ?
+//       `;
+//       articleParams.push(articleid);
+
+//       await queryDatabase(articleQuery, articleParams);
+         
+
+//     }
+
+//     /* ---------------- ARTICLE_IMAGE TABLE ---------------- */
+
+//     if (
+//       updates.old_page_number !== undefined &&
+//       updates.new_page_number !== undefined
+//     ) {
+//       let imageSet = [];
+//       let imageParams = [];
+
+//       imageSet.push("Page_Number = ?");
+//       imageParams.push(updates.new_page_number);
+
+//       if (updates.page_name !== undefined) {
+//         imageSet.push("pagename = ?");
+//         imageParams.push(updates.page_name);
+//       }
+
+//       if (updates.full_text !== undefined) {
+//         imageSet.push("full_text = ?");
+//         imageParams.push(updates.full_text);
+//       }
+
+//       const imageQuery = `
+//         UPDATE article_image
+//         SET ${imageSet.join(", ")}
+//         WHERE ArticleID = ? AND Page_Number = ?
+//       `;
+
+//       imageParams.push(articleid, updates.old_page_number);
+
+//       await queryDatabase(imageQuery, imageParams);
+//     }
+
+//     return res.json({
+//       message: "Article & Page updated successfully"
+//     });
+
+//   } catch (err) {
+//     // await connection.rollback();
+//     console.error("SQL Update Error:", err);
+//     return res.status(500).json({
+//       message: "Internal Server Error"
+//     });
+//   } 
+// };
+
+
+// exports.
+// updateArticle = async (req, res) => {
+//   try {
+//     const { articleid, updates } = req.body;
+
+//     if (!articleid || !updates)
+//       return res
+//         .status(400)
+//         .json({ message: "articleid & updates are required" });
+
+//         console.log("articleid : ", articleid);
+//         console.log("updates: ", updates);
+        
+        
+//     // Allowed fields
+//     const allowed = [
+//       "headline",
+//       "iscolor",
+//       "isphoto",
+//       "ispremium",
+//       "userid",
+//       "sector"
+//     ];
+
+//     const safeUpdate = {};
+//     for (let key of allowed) {
+//       if (updates[key] !== undefined) safeUpdate[key] = updates[key];
+//     }
+//     console.log("Safe Update Data:", req.body);
+//     const updated = await Article.updateMany(
+//       { articleid: articleid },
+//       { $set: safeUpdate },
+//       { strict: false }
+//     );
+
+//     // 2️⃣ Page number update (array logic)
+//     if (updates.oldpagenumber && updates.newpagenumber) {
+//       const pageSet = {
+//         "pagenumber.$[page].pagenumber": updates.newpagenumber
+//       };
+
+//       if (updates.newpagename !== undefined ) {
+//         pageSet["pagenumber.$[page].pagename"] = updates.newpagename;
+//       }
+
+//       await Article.updateMany(
+//         { articleid },
+//         { $set: pageSet },
+//         {
+//           arrayFilters: [
+//             { "page.pagenumber": updates.oldpagenumber }
+//           ]
+//         }
+//       );
+//     }
+
+//     // ✅ ensure correct journalist format
+//     if (Array.isArray(updates.journalist)) {
+//       await Article.updateMany(
+//         { articleid },
+//         { $set: { journalist: updates.journalist } },
+//         { strict: false }
+//       );
+//     }
+
+
+//     let updateFT = {};
+//     if (safeUpdate.headline !== undefined)
+//       updateFT.headline = safeUpdate.headline;
+//     if (safeUpdate.subtitle !== undefined)
+//       updateFT.subtitle = safeUpdate.subtitle;
+//     if (updates.fulltext !== undefined)
+//       updateFT.fulltext = updates.fulltext;
+//       console.log("Updating Fulltext Article:", updateFT);
+//       await Article_fulltext.updateMany(
+//         { articleid: articleid },
+//         { $set: updateFT },
+//         { strict: false }
+//       );
+//     // }
+
+
+//     return res.json({ message: "Updated Successfully", updated });
+//   } catch (err) {
+//     console.error("Update Error:", err);
+//     return res.status(500).json({ message: "Internal Server Error" });
+//   }
+// };
 
 exports.removeJournalistFromArticle = async (req, res) => {
   try {
@@ -407,10 +694,97 @@ exports.removeJournalistFromArticle = async (req, res) => {
 //   }
 // };
 
+async function addToClientSQL(articleid, clientid, keyword) {
+  if (!Array.isArray(keyword) || !keyword.length) return;
+
+  for (const kw of keyword) {
+     // ✅ EXPLICIT MAPPING FROM FRONTEND → SQL
+    const keyid = kw.keyid;
+    const keycategory = kw.keywordcategory;   // 👈 frontend
+    const keytype = kw.keytpe;                // 👈 frontend typo
+    const rejected = kw.rejected ? 1 : 0;
+    const companys = kw.companys ?? "";
+    const brands = kw.brandString ?? "";
+
+    // 🔹 Check if keyword already exists for this article + client
+    const checkQuery = `
+      SELECT keyid
+      FROM keywordlog
+      WHERE articleid = ?
+        AND clientid = ?
+        AND keyid = ?
+    `;
+
+    const existing = await queryDatabase(checkQuery, [
+      articleid,
+      clientid,
+      keyid
+    ]);
+
+    if (existing.length) {
+      // 🔁 UPDATE
+      const updateQuery = `
+        UPDATE keywordlog
+        SET
+          keycategory = ?,
+          keytype = ?,
+          rejected = ?,
+          companys = ?,
+          brands = ?
+        WHERE articleid = ?
+          AND clientid = ?
+          AND keyid = ?
+      `;
+
+      await queryDatabase(updateQuery, [
+        keycategory,
+        keytype,
+        rejected,
+        companys,
+        brands,
+        articleid,
+        clientid,
+        keyid
+      ]);
+    } else {
+      // ➕ INSERT
+      const insertQuery = `
+        INSERT INTO keywordlog
+        (
+          keyid,
+          clientid,
+          articleid,
+          keycategory,
+          keytype,
+          rejected,
+          companys,
+          brands
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `;
+
+      await queryDatabase(insertQuery, [
+        keyid,
+        clientid,
+        articleid,
+        keycategory,
+        keytype,
+        rejected,
+        companys,
+        brands
+      ]);
+    }
+  }
+
+  return true;
+}
+
+
+
 exports.addToClient = async (req, res) => {
   try {
-    const { articleid, keyword, userid } = req.body;
-
+    const { articleid, keyword, userid, clientid, clientname } = req.body;
+    console.log("Add to Client Request Body:", req.body);
     if (!articleid || !keyword || !userid || !clientid || !clientname)
       return res
         .status(400)
@@ -480,6 +854,11 @@ exports.addToClient = async (req, res) => {
         }
       }
     console.log("Add to Client Results:", results);
+
+    /* ---------------- SQL KEYWORD LOG ---------------- */
+
+    // await addToClientSQL(articleid, clientid, keyword);
+
     return res.json({ message: "article added Successfully", results });
   } catch (err) {
     console.error("Update Error:", err);
