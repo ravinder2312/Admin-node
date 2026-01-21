@@ -8,7 +8,7 @@ router.post("/articleDetails", adminController.articleDetails);
 router.get("/getClients", adminController.getClients);
 router.post("/getClientKeywords", adminController.getClientKeywords);
 router.post("/addToClient", adminController.addToClient);
-router.put("/updateArticle", adminController.updateArticle);
+router.post("/saveArticle", adminController.updateArticle);
 
 
 module.exports = router;
