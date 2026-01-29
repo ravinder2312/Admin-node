@@ -382,38 +382,38 @@ exports.getClientKeywords = async (req, res) => {
   };
 
 
-exports.removeJournalistFromArticle = async (req, res) => {
-  try {
-    const { articleid, journalistName } = req.body;
+// exports.removeJournalistFromArticle = async (req, res) => {
+//   try {
+//     const { articleid, journalistName } = req.body;
 
-    if (!articleid || !journalistName) {
-      return res.status(400).json({
-        message: "articleid and journalistName are required"
-      });
-    }
+//     if (!articleid || !journalistName) {
+//       return res.status(400).json({
+//         message: "articleid and journalistName are required"
+//       });
+//     }
 
-    console.log("Removing journalist:", journalistName);
-    console.log("From article:", articleid);
+//     console.log("Removing journalist:", journalistName);
+//     console.log("From article:", articleid);
 
-    const result = await Article.updateMany(
-      { articleid },
-      {
-        $pull: {
-          journalist: { journalist: journalistName }
-        }
-      }
-    );
+//     const result = await Article.updateMany(
+//       { articleid },
+//       {
+//         $pull: {
+//           journalist: { journalist: journalistName }
+//         }
+//       }
+//     );
 
-    return res.json({
-      message: "Journalist removed successfully",
-      modifiedCount: result.modifiedCount
-    });
+//     return res.json({
+//       message: "Journalist removed successfully",
+//       modifiedCount: result.modifiedCount
+//     });
 
-  } catch (err) {
-    console.error("Remove Journalist Error:", err);
-    return res.status(500).json({ message: "Internal Server Error" });
-  }
-};
+//   } catch (err) {
+//     console.error("Remove Journalist Error:", err);
+//     return res.status(500).json({ message: "Internal Server Error" });
+//   }
+// };
 
 
 async function addToClientSQL(articleid, clientid, keyword) {
