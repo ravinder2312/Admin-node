@@ -185,37 +185,47 @@ exports.getClients = async (req, res) => {
 
 exports.getClientKeywords = async (req, res) => {
   try {
-    const { clientid } = req.body;
+    const { keyword } = req.body;
     console.log(req.body);
 
-    if (!clientid) {
-      return res.status(400).json({ message: "clientid required" });
+    if (!keyword) {
+      return res.status(400).json({ message: "keyword required" });
     }
 
     const query = `
-      SELECT
-	      km.KeyWord, km.Filter, km.Filter_String,
-        ck.ClientID,
-        ck.KeywordID,
-        ck.Category,
-        ck.Type,
-        ck.CompanyS,
-        ck.BrandS,
-        cp.Name
-      FROM clientkeyword ck
-      JOIN clientprofile cp
-        ON ck.clientid = cp.clientid
-	   JOIN keyword_master km
-        ON ck.KeywordID = km.keyid
-      WHERE ck.clientid = ?;
+      SELECT 
+    keyword_master.keyid AS KeywordID,
+    keyword_master.Keyword,
+    keyword_master.filter_string,
+    IFNULL(clientprofile.name, '') 'Clients',
+    clientkeyword.filter AS filter,
+    clientkeyword.clientid AS clientid,
+    clientkeyword.type AS keytype,
+    clientkeyword.companys AS companys,
+    clientkeyword.category AS keycategory,
+    clientkeyword.brands AS brands
+FROM
+    keyword_master
+        JOIN
+    clientkeyword ON keyword_master.keyid = clientkeyword.keywordid
+        JOIN
+    clientprofile ON clientprofile.clientid = clientkeyword.clientid
+        AND clientprofile.deleted <> 1
+WHERE
+    (clientprofile.status = 366
+        OR clientprofile.status = 373
+        OR clientprofile.status IS NULL)
+        AND keyword_master.keyword LIKE ?
+GROUP BY keyword_master.keyid , clientprofile.clientid
+ORDER BY clientprofile.name , keyword_master.keyword
 
     `;
 
-    const results = await queryDatabase(query, [clientid]);
+    const results = await queryDatabase(query, [keyword]);
     res.status(200).json(results);
 
   } catch (error) {
-    console.error("Error fetching client keywords:", error);
+    console.error("Error fetching in keywords:", error);
     res.status(500).json({ error: error.message });
   }
 };
