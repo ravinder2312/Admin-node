@@ -13,63 +13,25 @@ const { queryDatabase46 } = require("../db_46");
 // Get articles based on pubdate, pub, and edition
 const getArticles = async (req, res) => {
   try {
-    const { pubdate, pub, edition } = req.body;
+    const { pubdate, pub, edition, mode } = req.body;
     if (!pubdate || !pub) {
       return res
         .status(400)
         .json({ error: "Publication date, title, and edition are required" });
     }
 
-    // const query = `
-    //   SELECT
-    //     sub.PublicationTitle,
-    //     sub.Edition,
-    //     sub.pubdate,
-    //     sub.TotalArticles,
-    //     ai.Page_Number,
-    //     COUNT(ai.ArticleID) AS ArticlesOnPage
-    //   FROM
-    //     article a
-    //   JOIN
-    //     pub_master pm ON a.PubID = pm.Pubid
-    //   JOIN
-    //     picklist pl ON pm.Place = pl.ID
-    //   JOIN
-    //     (SELECT
-    //        pm.Title AS PublicationTitle,
-    //        pl.Name AS Edition,
-    //        a.pubdate,
-    //        COUNT(a.ArticleID) AS TotalArticles
-    //      FROM
-    //        article a
-    //      JOIN
-    //        pub_master pm ON a.PubID = pm.Pubid
-    //      JOIN
-    //        picklist pl ON pm.Place = pl.ID
-    //      WHERE
-    //        a.pubdate = ?
-    //        AND pm.Title = ?
-    //        AND pl.Name = ?
-    //      GROUP BY
-    //        pm.Title, pl.Name, a.pubdate) sub
-    //   ON
-    //     pm.Title = sub.PublicationTitle
-    //     AND pl.Name = sub.Edition
-    //     AND a.pubdate = sub.pubdate
-    //   LEFT JOIN
-    //     article_image ai ON a.ArticleID = ai.ArticleID
-    //   WHERE
-    //     a.pubdate = ?
-    //     AND pm.Title = ?
-    //     AND pl.Name = ?
-    //   GROUP BY
-    //     sub.PublicationTitle,
-    //     sub.Edition,
-    //     sub.pubdate,
-    //     ai.Page_Number
-    //   ORDER BY
-    //     cast(ai.Page_Number as unsigned);
-    // `;
+
+    let sqCondition = "";
+
+    if (mode === "manual") {
+      sqCondition = "a.sq_userid <> 'Issuebased' and";
+    } 
+    else if (mode === "issuebased") {
+      sqCondition = "a.sq_userid = 'Issuebased' and";
+    } 
+    else {
+      sqCondition = "1=1 and"; // ALL
+    }
 
     const query = `
       SELECT 
@@ -101,6 +63,7 @@ JOIN
         JOIN 
             picklist pl ON pm.Place = pl.ID
         WHERE 
+            ${sqCondition}
             a.pubdate = ?  
             AND pm.Title = ?  
             AND pl.Name = ?  
@@ -126,6 +89,7 @@ LEFT JOIN
         JOIN
             picklist pl ON pm.Place = pl.ID      -- Ensure picklist is joined here
         WHERE 
+            ${sqCondition}
             a.pubdate = ?  
             AND pm.Title = ?  
             AND pl.Name = ?
@@ -133,6 +97,7 @@ LEFT JOIN
             ai.Page_Number
     ) page_count ON ai.Page_Number = page_count.Page_Number  -- Join to get article count per page
 WHERE 
+${sqCondition}
     a.pubdate = ?  
     AND pm.Title = ?  
     AND pl.Name = ? 
@@ -141,7 +106,7 @@ cast(ai.Page_Number as unsigned);
 `;
     // ai.Page_Number, a.Title;  -- Order by page number and article title;
 
-    const results = await queryDatabase46(query, [
+    const results = await queryDatabase(query, [
       pubdate,
       pub,
       edition,
@@ -190,11 +155,23 @@ cast(ai.Page_Number as unsigned);
 // Get articles by page number
 const getArticlesByPageNo = async (req, res) => {
   try {
-    const { pubdate, pub, edition, pageNumber } = req.body;
+    const { pubdate, pub, edition, pageNumber, mode } = req.body;
     if (!pubdate || !pub || !pageNumber) {
       return res
         .status(400)
         .json({ error: "Publication date, title, and edition are required" });
+    }
+
+    let sqCondition = "";
+
+    if (mode === "manual") {
+      sqCondition = "a.sq_userid <> 'Issuebased' and";
+    } 
+    else if (mode === "issuebased") {
+      sqCondition = "a.sq_userid = 'Issuebased' and";
+    } 
+    else {
+      sqCondition = "1=1 and"; // ALL
     }
 
     const query = `
@@ -211,13 +188,14 @@ const getArticlesByPageNo = async (req, res) => {
       JOIN 
         article_image ai ON a.ArticleID = ai.ArticleID
       WHERE 
+      ${sqCondition}
         a.pubdate = ?  
         AND pm.Title = ?  
         AND pl.Name = ?  
         AND ai.Page_Number = ?;
     `;
 
-    const results = await queryDatabase46(query, [
+    const results = await queryDatabase(query, [
       pubdate,
       pub,
       edition,
@@ -329,7 +307,7 @@ const getFullTextById = async (req, res) => {
         a.ArticleID = ?;
     `;
 
-    const results = await queryDatabase46(query, [articleID]);
+    const results = await queryDatabase(query, [articleID]);
 
     // Handle special characters in full text and other fields
     const handleSpecialCharacters = (text) => {
@@ -377,7 +355,7 @@ const getFilterString = async (req, res) => {
     const query = `SELECT Filter_String, keyid FROM keyword_master where PrimarykeyID = ? `;
 
     // Execute the query with parameterized values
-    const results = await queryDatabase46(query, [PrimarykeyID]);
+    const results = await queryDatabase(query, [PrimarykeyID]);
 
     // Send the results as a JSON response
     res.status(200).json(results);
@@ -446,6 +424,9 @@ const editArticle = async (req, res) => {
       params.push(sectorPid);
     }
 
+    if (params.length > 0) query += ",";
+    query += " lastupdated = NOW()";
+
     // Append WHERE clause
     query += " WHERE ArticleID = ?";
     params.push(id);
@@ -509,7 +490,7 @@ const getJournalists = async (req, res) => {
   try {
     let query = "select JourID, Fname, Lname from journalist;";
 
-    const results = await queryDatabase46(query);
+    const results = await queryDatabase(query);
 
     res.status(200).json({ results });
   } catch (error) {
@@ -520,7 +501,7 @@ const getJournalists = async (req, res) => {
 const getAllSector = async (req, res) => {
   try {
     const query = "SELECT ID, Name FROM picklist WHERE Type = 'Sector';";
-    const results = await queryDatabase46(query);
+    const results = await queryDatabase(query);
 
     if (results.length === 0) {
       return res
@@ -550,7 +531,7 @@ const getSubsectorByID = async (req, res) => {
 
     const query = `SELECT ID, Type, Name FROM picklist WHERE Type = 'subsector' AND SubType = ${ID};`;
 
-    const results = await queryDatabase46(query);
+    const results = await queryDatabase(query);
 
     // if (results.length === 0) {
     //   return res.status(200).json({ success: false, message: "No subsectors found." });
@@ -616,7 +597,7 @@ const addJourId = async (req, res) => {
 
     if (jourId === 0) {
       let selectQuery = `select * from journalist where Fname = ? && Lname = ?;`;
-      const results = await queryDatabase46(selectQuery, [fname, lname]);
+      const results = await queryDatabase(selectQuery, [fname, lname]);
 
       if (results.length === 0) {
         let addQuery = `INSERT INTO journalist (Fname, Lname) 
@@ -625,12 +606,12 @@ const addJourId = async (req, res) => {
         const results = await queryDatabase(addQuery, [fname, lname]);
         if (results.affectedRows > 0) {
           let getJourId = `select * from journalist where Fname = ? && Lname = ? ORDER BY JourID LIMIT 1;`;
-          const results = await queryDatabase46(getJourId, [fname, lname]);
+          const results = await queryDatabase(getJourId, [fname, lname]);
           res.status(200).json({ results });
         }
       } else {
         let getJourId = `select * from journalist where Fname = ? && Lname = ? ORDER BY JourID LIMIT 1;`;
-        const results = await queryDatabase46(getJourId, [fname, lname]);
+        const results = await queryDatabase(getJourId, [fname, lname]);
         res.status(200).json({ results });
       }
     }
@@ -644,7 +625,7 @@ const removeArticleJournalist = async (req, res) => {
 
   try {
     let selectQuery = `SELECT * FROM article_journalist WHERE ArticleID = ? && JournalistID = ?;`;
-    const selectResults = await queryDatabase46(selectQuery, [
+    const selectResults = await queryDatabase(selectQuery, [
       articleId,
       journalistId,
     ]);
@@ -676,7 +657,7 @@ const checkArticleJournalist = async (req, res) => {
   try {
     const { articleId, journalistId } = req.body;
     const query = `SELECT * FROM article_journalist WHERE ArticleID = ? AND JournalistID = ?`;
-    const results = await queryDatabase46(query, [articleId, journalistId]);
+    const results = await queryDatabase(query, [articleId, journalistId]);
 
     if (results.length > 0) {
       return res.status(200).json({ exists: true });

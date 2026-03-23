@@ -9,6 +9,7 @@ router.get("/getClients", adminController.getClients);
 router.post("/getClientKeywords", adminController.getClientKeywords);
 router.post("/addToClient", adminController.addToClient);
 router.post("/saveArticle", adminController.updateArticle);
-
+router.get("/getKeywordList", adminController.getKeywordList);
+router.delete("/deleteArticle", adminController.deleteArticle);
 
 module.exports = router;
