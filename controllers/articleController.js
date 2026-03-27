@@ -3,12 +3,14 @@ const fs = require("fs");
 const multer = require("multer");
 const express = require("express");
 const axios = require("axios");
-const FormData = require('form-data');
+const FormData = require("form-data");
 
 const app = express();
 
 const { queryDatabase } = require("../db");
 const { queryDatabase46 } = require("../db_46");
+const Article = require("../ArticleModel1");
+const ArticleFulltext = require("../article_fulltextModel");
 
 // Get articles based on pubdate, pub, and edition
 const getArticles = async (req, res) => {
@@ -20,16 +22,13 @@ const getArticles = async (req, res) => {
         .json({ error: "Publication date, title, and edition are required" });
     }
 
-
     let sqCondition = "";
 
     if (mode === "manual") {
       sqCondition = "a.sq_userid <> 'Issuebased' and";
-    } 
-    else if (mode === "issuebased") {
+    } else if (mode === "issuebased") {
       sqCondition = "a.sq_userid = 'Issuebased' and";
-    } 
-    else {
+    } else {
       sqCondition = "1=1 and"; // ALL
     }
 
@@ -166,11 +165,9 @@ const getArticlesByPageNo = async (req, res) => {
 
     if (mode === "manual") {
       sqCondition = "a.sq_userid <> 'Issuebased' and";
-    } 
-    else if (mode === "issuebased") {
+    } else if (mode === "issuebased") {
       sqCondition = "a.sq_userid = 'Issuebased' and";
-    } 
-    else {
+    } else {
       sqCondition = "1=1 and"; // ALL
     }
 
@@ -446,9 +443,10 @@ const editArticle = async (req, res) => {
 const editPage = async (req, res) => {
   try {
     // const { id } = req.params;
-    const { id, old_page_number, new_page_number, page_name, full_text } = req.body;
+    const { id, old_page_number, new_page_number, page_name, full_text } =
+      req.body;
     console.log(req.body);
-    
+
     // Build the query dynamically based on which fields are provided
     let query = "UPDATE article_image SET";
     const params = [];
@@ -691,34 +689,458 @@ const addArticleJournalist = async (req, res) => {
 const getImageBase64 = async (req, res) => {
   const imageUrl = req.body.imageUrl;
   // console.log(imageUrl);
-  
+
   try {
-    console.log(`Fetching image from URL: ${imageUrl}`);  // Log the image URL to make sure it's correct
+    console.log(`Fetching image from URL: ${imageUrl}`); // Log the image URL to make sure it's correct
 
     // Fetch the image as a buffer (binary data)
-    const response = await axios.get(imageUrl, { responseType: 'arraybuffer' });
+    const response = await axios.get(imageUrl, { responseType: "arraybuffer" });
 
     // Log the response data
     console.log(`Received image data, size: ${response.data.length} bytes`);
 
     // Set the correct content type for the image (e.g., image/jpeg, image/png)
-    res.set('Content-Type', 'image/jpeg');
-    
+    res.set("Content-Type", "image/jpeg");
+
     // Send the binary data as the image response
     res.send(response.data);
     console.log(response.data);
-    
   } catch (error) {
-    console.error('Error fetching image:', error.message);  // Log error message
-    res.status(500).send('Failed to fetch image');
+    console.error("Error fetching image:", error.message); // Log error message
+    res.status(500).send("Failed to fetch image");
   }
 };
 
+const getArticlesMongo = async (req, res) => {
+  try {
+    const { pubdate, pub, edition } = req.body;
+    if (!pubdate || !pub || !edition) {
+      return res
+        .status(400)
+        .json({ error: "Publication date, title, and edition are required" });
+    }
+
+    const mongoQuery = {
+      pubdate,
+      publication: pub,
+      city: edition,
+    };
+
+    const results = await Article.aggregate([
+      {
+        $match: mongoQuery,
+      },
+      {
+        $group: {
+          _id: "$articleid",
+          article: { $first: "$$ROOT" },
+        },
+      },
+      {
+        $project: {
+          _id: 0,
+          articleid: "$article.articleid",
+          publication: {
+            $ifNull: ["$article.publication", "$article.primarypublication"],
+          },
+          city: "$article.city",
+          pubdate: "$article.pubdate",
+          headline: "$article.headline",
+          pagenumber: {
+            $let: {
+              vars: {
+                pages: {
+                  $map: {
+                    input: { $ifNull: ["$article.pagenumber", []] },
+                    as: "page",
+                    in: {
+                      $cond: [
+                        { $eq: [{ $type: "$$page" }, "object"] },
+                        "$$page.pagenumber",
+                        "$$page",
+                      ],
+                    },
+                  },
+                },
+              },
+              in: {
+                $cond: [
+                  { $gt: [{ $size: "$$pages" }, 0] },
+                  { $setUnion: ["$$pages", []] },
+                  [null],
+                ],
+              },
+            },
+          },
+        },
+      },
+      {
+        $facet: {
+          totalArticles: [{ $count: "count" }],
+          pageCounts: [
+            { $unwind: "$pagenumber" },
+            {
+              $group: {
+                _id: "$pagenumber",
+                ArticlesOnPage: { $sum: 1 },
+              },
+            },
+          ],
+          articles: [
+            { $unwind: "$pagenumber" },
+            {
+              $project: {
+                _id: 0,
+                PublicationTitle: "$publication",
+                Edition: "$city",
+                pubdate: 1,
+                Page_Number: "$pagenumber",
+                ArticleID: "$articleid",
+                ArticleTitle: {
+                  $cond: [
+                    { $eq: [{ $type: "$headline" }, "string"] },
+                    "$headline",
+                    "",
+                  ],
+                },
+              },
+            },
+          ],
+        },
+      },
+    ]);
+
+    const totalArticles = results[0]?.totalArticles?.[0]?.count || 0;
+    const pageCountMap = new Map(
+      (results[0]?.pageCounts || []).map((item) => [
+        item._id == null ? "__NULL__" : String(item._id),
+        item.ArticlesOnPage,
+      ])
+    );
+
+    const response = (results[0]?.articles || [])
+      .map((item) => ({
+        PublicationTitle: item.PublicationTitle || pub,
+        Edition: item.Edition || edition,
+        pubdate: item.pubdate || pubdate,
+        TotalArticles: totalArticles,
+        Page_Number: item.Page_Number,
+        ArticlesOnPage:
+          pageCountMap.get(
+            item.Page_Number == null ? "__NULL__" : String(item.Page_Number)
+          ) || 0,
+        ArticleID: item.ArticleID,
+        ArticleTitle: item.ArticleTitle,
+      }))
+      .sort((a, b) => {
+        const aPage = parseInt(a.Page_Number, 10);
+        const bPage = parseInt(b.Page_Number, 10);
+        const aValid = Number.isFinite(aPage);
+        const bValid = Number.isFinite(bPage);
+
+        if (aValid && bValid) {
+          return aPage - bPage;
+        }
+
+        if (aValid) {
+          return -1;
+        }
+
+        if (bValid) {
+          return 1;
+        }
+
+        return String(a.ArticleTitle).localeCompare(String(b.ArticleTitle));
+      });
+
+    res.status(200).json(response);
+  } catch (error) {
+    console.error("Error fetching articles from MongoDB:", error);
+    res.status(500).json({ error: error });
+  }
+};
+
+const getArticlesByPageNoMongo = async (req, res) => {
+  try {
+    const { pubdate, pub, edition, pageNumber } = req.body;
+    if (!pubdate || !pub || !pageNumber) {
+      return res
+        .status(400)
+        .json({ error: "Publication date, title, and edition are required" });
+    }
+
+    const mongoQuery = {
+      pubdate,
+      publication: pub, 
+      city: edition,
+    };
+
+    const results = await Article.aggregate([
+      {
+        $match: mongoQuery,
+      },
+      {
+        $group: {
+          _id: "$articleid",
+          article: { $first: "$$ROOT" },
+        },
+      },
+      {
+        $project: {
+          _id: 0,
+          articleid: "$article.articleid",
+          headline: "$article.headline",
+          pagenumber: {
+            $let: {
+              vars: {
+                pages: {
+                  $map: {
+                    input: { $ifNull: ["$article.pagenumber", []] },
+                    as: "page",
+                    in: {
+                      $cond: [
+                        { $eq: [{ $type: "$$page" }, "object"] },
+                        "$$page.pagenumber",
+                        "$$page",
+                      ],
+                    },
+                  },
+                },
+              },
+              in: {
+                $cond: [
+                  { $gt: [{ $size: "$$pages" }, 0] },
+                  { $setUnion: ["$$pages", []] },
+                  [null],
+                ],
+              },
+            },
+          },
+        },
+      },
+      { $unwind: "$pagenumber" },
+      {
+        $match: {
+          $expr: {
+            $eq: [{ $toString: "$pagenumber" }, String(pageNumber)],
+          },
+        },
+      },
+      {
+        $project: {
+          _id: 0,
+          ArticleID: "$articleid",
+          ArticleTitle: {
+            $cond: [
+              { $eq: [{ $type: "$headline" }, "string"] },
+              "$headline",
+              "",
+            ],
+          },
+          Page_Number: "$pagenumber",
+        },
+      },
+      {
+        $sort: {
+          ArticleTitle: 1,
+        },
+      },
+    ]);
+
+    res.status(200).json(results);
+  } catch (error) {
+    res.status(500).json({ error: error });
+  }
+};
+
+const getFullTextByIdMongo = async (req, res) => {
+  try {
+    const { articleID } = req.body;
+    if (!articleID) {
+      return res.status(400).json({ error: "Article ID is required" });
+    }
+
+    const results = await ArticleFulltext.aggregate([
+      {
+        $match: {
+          articleid: articleID,
+        },
+      },
+      {
+        $lookup: {
+          from: "impactliveupdated",
+          localField: "articleid",
+          foreignField: "articleid",
+          as: "article",
+        },
+      },
+      {
+        $addFields: {
+          article: { $arrayElemAt: ["$article", 0] },
+        },
+      },
+      {
+        $project: {
+          _id: 0,
+          ArticleID: "$articleid",
+          pubdate: {
+            $ifNull: ["$article.pubdate", "$pubdate"],
+          },
+          PubID: "$article.pubid",
+          Num_pages: {
+            $ifNull: ["$article.numberofpages", "$article.noofpages"],
+          },
+          ArticleTitle: {
+            $ifNull: ["$article.headline", "$headline", ""],
+          },
+          Sub_Title: "$article.subtitle",
+          IsColor: "$article.iscolor",
+          IsPhoto: "$article.isphoto",
+          UserID: "$article.userid",
+          IsPremium: "$article.ispremium",
+          ave: "$article.ave",
+          lastupdated: "$article.lastupdated",
+          sq_allocatedDateTime: "$article.captureddatetime",
+          Date_Time_Acqured: "$article.date_time_acquired",
+          md5id: "$article.md5id",
+          lastmodified_userid: "$article.lastUpdatedUserid",
+          area: "$article.area",
+          Page_Number: {
+            $let: {
+              vars: {
+                firstPage: {
+                  $arrayElemAt: [{ $ifNull: ["$article.pagenumber", []] }, 0],
+                },
+              },
+              in: {
+                $cond: [
+                  { $eq: [{ $type: "$$firstPage" }, "object"] },
+                  "$$firstPage.pagenumber",
+                  "$$firstPage",
+                ],
+              },
+            },
+          },
+          pagename: {
+            $ifNull: [
+              "$article.pagename",
+              {
+                $let: {
+                  vars: {
+                    firstPage: {
+                      $arrayElemAt: [{ $ifNull: ["$article.pagenumber", []] }, 0],
+                    },
+                  },
+                  in: {
+                    $cond: [
+                      { $eq: [{ $type: "$$firstPage" }, "object"] },
+                      "$$firstPage.pagename",
+                      "",
+                    ],
+                  },
+                },
+              },
+              "",
+              "",
+            ],
+          },
+          full_text: {
+            $cond: [
+              { $eq: [{ $type: "$fulltext" }, "string"] },
+              "$fulltext",
+              "",
+            ],
+          },
+          imagedirectory: "$article.imagedirectory",
+          Image_name: {
+            $let: {
+              vars: {
+                firstImage: {
+                  $arrayElemAt: [{ $ifNull: ["$article.imagename", []] }, 0],
+                },
+              },
+              in: {
+                $cond: [
+                  { $eq: [{ $type: "$$firstImage" }, "object"] },
+                  "$$firstImage.imagename",
+                  "$$firstImage",
+                ],
+              },
+            },
+          },
+          html: null,
+          htmldirectory: "$article.htmldirectory",
+          start_acq_time: null,
+          end_acq_time: null,
+          keyid: {
+            $let: {
+              vars: {
+                firstKeyword: {
+                  $arrayElemAt: [{ $ifNull: ["$article.keyword", []] }, 0],
+                },
+              },
+              in: "$$firstKeyword.keyid",
+            },
+          },
+          PrimarykeyID: null,
+          MergedKeywordFilter: {
+            $let: {
+              vars: {
+                firstKeyword: {
+                  $arrayElemAt: [{ $ifNull: ["$article.keyword", []] }, 0],
+                },
+              },
+              in: {
+                $cond: [
+                  {
+                    $and: [
+                      { $ne: ["$$firstKeyword.keyword", null] },
+                      { $ne: ["$$firstKeyword.keywordcategory", null] },
+                    ],
+                  },
+                  {
+                    $concat: [
+                      "$$firstKeyword.keyword",
+                      ":",
+                      "$$firstKeyword.keywordcategory",
+                    ],
+                  },
+                  null,
+                ],
+              },
+            },
+          },
+          PublicationTitle: {
+            $ifNull: ["$article.publication", "$publication", ""],
+          },
+          SectorName: "$article.sector",
+          SectorID: null,
+          Fname: {
+            $let: {
+              vars: {
+                firstJournalist: {
+                  $arrayElemAt: [{ $ifNull: ["$article.journalist", []] }, 0],
+                },
+              },
+              in: "$$firstJournalist.journalist",
+            },
+          },
+          Lname: null,
+          JournalistID: null,
+        },
+      },
+    ]);
+
+    res.status(200).json(results);
+  } catch (error) {
+    res.status(500).json({ error: error });
+  }
+};
 
 module.exports = {
-  getArticles,
-  getArticlesByPageNo,
-  getFullTextById,
+  getArticles: getArticlesMongo,
+  getArticlesByPageNo: getArticlesByPageNoMongo,
+  getFullTextById: getFullTextByIdMongo,
   getFilterString,
   editArticle,
   editPage,
